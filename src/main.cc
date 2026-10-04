@@ -134,7 +134,22 @@ public:
             right = std::make_unique<Node>(node->right.get());
     }
     NodeKind GetKind() const {return kind;}
-    std::string ToString() const {return name; }
+    std::string ToString() const {
+        switch(kind) {
+            case NodeKind::Var:
+                return name;
+            case NodeKind::Const:
+                return name;
+            case NodeKind::Imp:
+                return "("+left->ToString() + "->" + right->ToString()+")";
+            case NodeKind::Not:
+                return "~"+left->ToString();
+            case NodeKind::Or:
+                return "("+left->ToString() + "|" + right->ToString()+")";
+            case NodeKind::And:
+                return "("+left->ToString() + "&" + right->ToString()+")";
+        }
+    }
     const Node* GetLeft() const {return left.get();}
     const Node* GetRight() const {return right.get();}
     bool HasValue() const {return value;}
@@ -166,6 +181,9 @@ public:
     }
     bool operator==(const Node& b) const {
         return Equal(b);
+    }
+    bool operator!=(const Node& b) const {
+        return !Equal(b);
     }
 };
 
@@ -221,7 +239,7 @@ class Parser {
     std::map<std::pair<Symbol, TokenKind>, std::vector<Symbol>> M;
 public:
     Parser() : M(BuildTable()) {}
-    std::unique_ptr<Node> Parse(const std::vector<Token>& toks) {
+    std::unique_ptr<Node> Parse(const std::vector<Token>& toks) const {
         std::vector<Symbol> stack = {Symbol::End, Symbol::E};
         std::vector<std::unique_ptr<Node>> values;
         size_t pos = 0;
@@ -269,13 +287,15 @@ public:
         return pop(values);
     }
 };
-
-
+static Parser defaultParser = Parser();
+std::unique_ptr<Node> ParseStatement(const std::string& a) {
+    return defaultParser.Parse(Tokenize(a));
+}
 
 // -----------------------------------------
 // Logic
 
-class Axiom {
+class CorrectFormula {
     std::unique_ptr<Node> pattern;
     static bool MatchNode(const Node* p, const Node* f, std::map<std::string, const Node*>& s) {
         if (p->GetKind() == NodeKind::Var) {
@@ -288,8 +308,11 @@ class Axiom {
         return !p->GetRight() || MatchNode(p->GetRight(), f->GetRight(), s);
     }
 public:
-    Axiom(const Node* _pattern) {
+    CorrectFormula(const Node* _pattern) {
         pattern = std::make_unique<Node>(_pattern);
+    }
+    const Node& GetPattern() const {
+        return *pattern;
     }
     std::optional<std::map<std::string, const Node*>> Match(const Node& f) const {
         std::map<std::string, const Node*> s;
@@ -302,15 +325,15 @@ class InferenceRule {
 public:
     virtual ~InferenceRule() = default;
     virtual std::string ToString() const = 0;
-    virtual std::optional<std::vector<size_t>> Derive(const Node& conclusion, const std::vector<const Node*>& proven) const = 0;
+    virtual std::optional<std::vector<size_t>> Derive(const Node& conclusion, const std::vector<std::unique_ptr<Node>>& proven) const = 0;
 };
 
 class MP : public InferenceRule {
 public:
     std::string ToString() const override { return "MP"; }
-    std::optional<std::vector<size_t>> Derive(const Node& b, const std::vector<const Node*>& proven) const override {
+    std::optional<std::vector<size_t>> Derive(const Node& b, const std::vector<std::unique_ptr<Node>>& proven) const override {
         for (size_t j = 0; j < proven.size(); ++j) {
-            const Node* imp = proven[j];
+            const Node* imp = proven[j].get();
             if (imp->GetKind() != NodeKind::Imp || *imp->GetRight() != b) continue;
             for (size_t i = 0; i < proven.size(); ++i)
                 if (*proven[i] == *imp->GetLeft()) return std::vector<size_t>{i, j};
@@ -321,31 +344,116 @@ public:
 
 // -----------------------------------------
 // Verifier
+// -----------------------------------------
+
+enum class Rule {
+    Nil, proven, ax, MP
+};
+
+struct ProverOutput {
+    Rule rule;
+    union {
+        size_t axNum;
+        std::pair<const Node*, const Node*> mpVal;
+    };
+    std::map<std::string, const Node*> subst;
+};
+
+class System {
+    std::vector<CorrectFormula> ax;
+    std::vector<std::unique_ptr<Node>> proven;
+    Parser parser;
+    MP ruleMP;
+public:
+    System(Parser parser) : proven(0), parser(parser) {};
+
+    /* 
+     * @param statement формула B
+     * @retval возвращает структуру ProverOutput
+     */
+    ProverOutput ProveStatement(const Node* statement) {
+        for (auto it = proven.begin(); it != proven.end(); ++it) {
+            if (*(*it) == *statement) {
+                return {Rule::proven, {0}};
+            }
+        }
+        for (auto it = ax.begin(); it != ax.end(); ++it) {
+            if (auto out = (*it).Match(*statement)) {
+                proven.push_back(std::make_unique<Node>(statement));
+                return {Rule::ax, {.axNum = static_cast<size_t>(it - ax.begin())}, out.value()};
+            }
+        }
+        std::optional<std::vector<size_t>> source = ruleMP.Derive(*statement, proven);
+        if (source.has_value()) {
+            proven.push_back(std::make_unique<Node>(statement));
+            return {Rule::MP, {.mpVal = std::pair<const Node*, const Node*>{proven[source.value()[0]].get(), proven[source.value()[1]].get()}}};
+        }
+        return {Rule::Nil, {0}};
+    }
+    const Node& GetAxiom(size_t i) const {
+        return ax[i].GetPattern();
+    }
+    static System Var4(const Parser& parser) {
+        System system(parser);
+        system.proven.push_back(parser.Parse(Tokenize("p -> (q -> p)")));
+        system.proven.push_back(parser.Parse(Tokenize("(s -> (p -> q)) -> ((s -> p) -> (s -> q))")));
+        system.proven.push_back(parser.Parse(Tokenize("(p & q) -> p")));
+        system.proven.push_back(parser.Parse(Tokenize("(p & q) -> q")));
+        system.proven.push_back(parser.Parse(Tokenize("p -> (q -> (p & q))")));
+        system.proven.push_back(parser.Parse(Tokenize("p -> (p | q)")));
+        system.proven.push_back(parser.Parse(Tokenize("q -> (p | q)")));
+        system.proven.push_back(parser.Parse(Tokenize("(p -> r) -> ((q -> r) -> ((p | q) -> r))")));
+        system.proven.push_back(parser.Parse(Tokenize("~p -> (p -> q)")));
+        system.proven.push_back(parser.Parse(Tokenize("(p -> q) -> ((p -> ~q) -> ~p)")));
+        system.proven.push_back(parser.Parse(Tokenize("p | ~p")));
+        for (auto &x : system.proven) {
+            system.ax.push_back(CorrectFormula(x.get()));
+        }
+        return system;
+    }
+};
 
 // -----------------------------------------
 // REPL and main
+// -----------------------------------------
+
+void REPL() {
+    std::string in;
+    bool running = true;
+    System system = System::Var4(defaultParser);
+    while (running) {
+        std::cout << ">>> ";
+        std::getline(std::cin, in, '\n');
+        if (in == ""){
+            continue;
+        }
+        try {
+            std::unique_ptr<Node> parsedStatement = ParseStatement(in);
+            ProverOutput out = system.ProveStatement(parsedStatement.get());
+            switch(out.rule) {
+                case Rule::ax:
+                    std::cout << "Формула выводима подстановкой ";
+                    for (auto it = out.subst.begin(); it != out.subst.end(); ++it) {
+                        std::cout << it->first << " в " << it->second->ToString() << ", ";
+                    }
+                    std::cout << "в аксиому " << system.GetAxiom(out.axNum).ToString() << "\n";
+                    break;
+                case Rule::proven: 
+                    std::cout << "Формула была доказана ранее или является аксиомой.\n";
+                    break;
+                case Rule::Nil:
+                    std::cout << "Формула не выводима. \n";
+                    break;
+                case Rule::MP:
+                    std::cout << "Формула выводима из формул " << out.mpVal.first->ToString() << " и " << out.mpVal.second->ToString() << " по правилу MP.\n";
+            }
+        } catch (const ParseError& e) {
+            std::cout << "Ошибка в формуле:" << e.what() << "\n";
+        }
+    }
+}
 
 int main(int argc, char* argv[]) {
-    std::string a = "mn -> (p -> p)";
-    std::string b = "a -> (b -> b)";
-    Parser parser;
-    std::unique_ptr<Node> root = parser.Parse(Tokenize(a));
-    Axiom ax1(root.get());
-    MP mp;
-    std::unique_ptr<Node> nB = parser.Parse(Tokenize(b));
-    std::unique_ptr<Node> nC = parser.Parse(Tokenize("a"));
-    if (auto e = ax1.Match(*nB)) {
-        std::cout << "YES\n";
-    } else {
-        std::cout << "NOOO\n";
-    }
-    std::vector<const Node*> vNodes;
-    vNodes.push_back(root.get());
-    vNodes.push_back(nC.get());
-    if (mp.Derive(*nB, vNodes)) {
-        std::cout << "Derivable\n";
-    } else {
-        std::cout << "Not Derivable\n";
-    }
+    REPL();
     return 0;
 }
