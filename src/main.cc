@@ -349,13 +349,14 @@ public:
 // -----------------------------------------
 
 enum class Rule {
-    Nil, proven, ax, MP
+    Nil, proven, ax, MP, beta
 };
 
 struct ProverOutput {
     Rule rule;
     union {
         size_t axNum;
+        size_t formulaNum;
         std::pair<const Node*, const Node*> mpVal;
     };
     std::map<std::string, const Node*> subst;
@@ -385,6 +386,13 @@ public:
                 return {Rule::ax, {.axNum = static_cast<size_t>(it - ax.begin())}, out.value()};
             }
         }
+        for (auto it = proven.begin(); it != proven.end(); ++it) {
+            if (auto out = CorrectFormula((*it).get()).Match(*statement)) {
+                size_t idx = static_cast<size_t>(it - proven.begin());
+                proven.push_back(std::make_unique<Node>(statement));
+                return {Rule::beta, {.formulaNum = idx}, out.value()};
+            }
+        }
         std::optional<std::vector<size_t>> source = ruleMP.Derive(*statement, proven);
         if (source.has_value()) {
             proven.push_back(std::make_unique<Node>(statement));
@@ -394,6 +402,19 @@ public:
     }
     const Node& GetAxiom(size_t i) const {
         return ax[i].GetPattern();
+    }
+    const Node& GetFormula(size_t i) const {
+        return *(proven[i]);
+    }
+    static System Var1(const Parser& parser) {
+        System system(parser);
+        system.proven.push_back(parser.Parse(Tokenize("p -> (q -> p)")));
+        system.proven.push_back(parser.Parse(Tokenize("(s -> (p -> q)) -> ((s -> p) -> (s -> q))")));
+        system.proven.push_back(parser.Parse(Tokenize("(((p->f))->f) -> p")));
+        for (auto &x : system.proven) {
+            system.ax.push_back(CorrectFormula(x.get()));
+        }
+        return system;
     }
     static System Var4(const Parser& parser) {
         System system(parser);
@@ -422,7 +443,7 @@ public:
 void REPL() {
     std::string in;
     int running = true;
-    System system = System::Var4(defaultParser);
+    System system = System::Var1(defaultParser);
     while (running) {
         std::cout << ">>> ";
         if (!std::getline(std::cin, in, '\n')) {
@@ -441,6 +462,13 @@ void REPL() {
                         std::cout << it->second->ToString() << " в " << it->first << ", ";
                     }
                     std::cout << "в аксиому " << system.GetAxiom(out.axNum).ToString() << "\n";
+                    break;
+                case Rule::beta:
+                    std::cout <<"Формула выводима из формулы " << system.GetFormula(out.formulaNum).ToString() << " по правилу beta с подстановкой ";
+                    for (auto it = out.subst.begin(); it != out.subst.end(); ++it) {
+                        std::cout << it->second->ToString() << " в " << it->first << ", ";
+                    }
+                    std::cout << "в формулу " << system.GetFormula(out.formulaNum).ToString() << "\n";
                     break;
                 case Rule::proven: 
                     std::cout << "Формула была доказана ранее или является аксиомой.\n";
