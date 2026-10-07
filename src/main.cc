@@ -137,9 +137,10 @@ public:
     std::string ToString() const {
         switch(kind) {
             case NodeKind::Var:
-                return name;
             case NodeKind::Const:
                 return name;
+            case NodeKind::Eqv:
+                return "("+left->ToString() + "<->" +right->ToString()+")";
             case NodeKind::Imp:
                 return "("+left->ToString() + "->" + right->ToString()+")";
             case NodeKind::Not:
@@ -149,6 +150,7 @@ public:
             case NodeKind::And:
                 return "("+left->ToString() + "&" + right->ToString()+")";
         }
+        return name;
     }
     const Node* GetLeft() const {return left.get();}
     const Node* GetRight() const {return right.get();}
@@ -436,7 +438,7 @@ void REPL() {
                 case Rule::ax:
                     std::cout << "Формула выводима подстановкой ";
                     for (auto it = out.subst.begin(); it != out.subst.end(); ++it) {
-                        std::cout << it->first << " в " << it->second->ToString() << ", ";
+                        std::cout << it->second->ToString() << " в " << it->first << ", ";
                     }
                     std::cout << "в аксиому " << system.GetAxiom(out.axNum).ToString() << "\n";
                     break;
