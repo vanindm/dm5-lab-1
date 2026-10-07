@@ -419,11 +419,13 @@ public:
 
 void REPL() {
     std::string in;
-    bool running = true;
+    int running = true;
     System system = System::Var4(defaultParser);
     while (running) {
         std::cout << ">>> ";
-        std::getline(std::cin, in, '\n');
+        if (!std::getline(std::cin, in, '\n')) {
+            running = false;
+        }
         if (in == ""){
             continue;
         }
