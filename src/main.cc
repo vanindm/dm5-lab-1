@@ -219,7 +219,7 @@ std::map<std::pair<Symbol, TokenKind>, std::vector<Symbol>> BuildTable() {
     M[{Symbol::E1, TokenKind::Eqv}] = {Symbol::Eqv, Symbol::I, Symbol::MkEqv, Symbol::E1};
     for (TokenKind t : {TokenKind::RParen, TokenKind::End}) M[{Symbol::E1, t}] = {};
 
-    M[{Symbol::I1, TokenKind::Imp}] = {Symbol::Imp, Symbol::I, Symbol::MkImp};
+    M[{Symbol::I1, TokenKind::Imp}] = {Symbol::Imp, Symbol::D, Symbol::MkImp, Symbol::I1};
     for (TokenKind t : {TokenKind::Eqv, TokenKind::RParen, TokenKind::End}) M[{Symbol::I1, t}] = {};
 
     M[{Symbol::D1, TokenKind::Or}] = {Symbol::Or, Symbol::C, Symbol::MkOr, Symbol::D1};
@@ -327,18 +327,22 @@ class InferenceRule {
 public:
     virtual ~InferenceRule() = default;
     virtual std::string ToString() const = 0;
-    virtual std::optional<std::vector<size_t>> Derive(const Node& conclusion, const std::vector<std::unique_ptr<Node>>& proven) const = 0;
+    virtual std::optional<std::vector<size_t>> Derive(const Node& conclusion, const std::vector<std::unique_ptr<Node>>& proven, const std::vector<CorrectFormula>& ax) const = 0;
 };
 
 class MP : public InferenceRule {
 public:
     std::string ToString() const override { return "MP"; }
-    std::optional<std::vector<size_t>> Derive(const Node& b, const std::vector<std::unique_ptr<Node>>& proven) const override {
+    std::optional<std::vector<size_t>> Derive(const Node& b, const std::vector<std::unique_ptr<Node>>& proven, const std::vector<CorrectFormula>& ax) const override {
         for (size_t j = 0; j < proven.size(); ++j) {
             const Node* imp = proven[j].get();
             if (imp->GetKind() != NodeKind::Imp || *imp->GetRight() != b) continue;
             for (size_t i = 0; i < proven.size(); ++i)
                 if (*proven[i] == *imp->GetLeft()) return std::vector<size_t>{i, j};
+            for (size_t i = 0; i < ax.size(); ++i) {
+                if (ax[i].Match(*imp->GetLeft()))
+                    return std::vector<size_t>{i, j};
+            }
         }
         return std::nullopt;
     }
@@ -385,7 +389,7 @@ public:
                 return {Rule::ax, {.axNum = static_cast<size_t>(it - ax.begin())}, out.value()};
             }
         }
-        std::optional<std::vector<size_t>> source = ruleMP.Derive(*statement, proven);
+        std::optional<std::vector<size_t>> source = ruleMP.Derive(*statement, proven, ax);
         if (source.has_value()) {
             proven.push_back(std::make_unique<Node>(statement));
             return {Rule::MP, {.mpVal = std::pair<const Node*, const Node*>{proven[source.value()[0]].get(), proven[source.value()[1]].get()}}};
