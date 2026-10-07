@@ -72,10 +72,12 @@ std::vector<Token> Tokenize(const std::string& s) {
         unsigned char c = s[i];
         if (std::isspace(c)) { ++i; continue; }
 
-        if (std::isalpha(c) || c == '_') {
-            size_t start = i;
-            while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_')) ++i;
-            out.push_back({TokenKind::Var, s.substr(start, i - start), start});
+        if (c == 'f' || c == 't') {
+            if (c == 'f')
+                out.push_back({TokenKind::Const, std::string(1, 'f'), i});
+            else
+                out.push_back({TokenKind::Const, std::string(1, 't'), i});
+            ++i;
             continue;
         }
         if (c == '0' || c == '1') {
@@ -83,6 +85,14 @@ std::vector<Token> Tokenize(const std::string& s) {
             ++i;
             continue;
         }
+        
+        if (std::isalpha(c) || c == '_') {
+            size_t start = i;
+            while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_')) ++i;
+            out.push_back({TokenKind::Var, s.substr(start, i - start), start});
+            continue;
+        }
+        
 
         bool matched = false;
         for (const auto& [text, kind] : ops) {
@@ -137,8 +147,9 @@ public:
     std::string ToString() const {
         switch(kind) {
             case NodeKind::Var:
-            case NodeKind::Const:
                 return name;
+            case NodeKind::Const:
+                return value ? "t" : "f";
             case NodeKind::Eqv:
                 return "("+left->ToString() + "<->" +right->ToString()+")";
             case NodeKind::Imp:
@@ -219,7 +230,7 @@ std::map<std::pair<Symbol, TokenKind>, std::vector<Symbol>> BuildTable() {
     M[{Symbol::E1, TokenKind::Eqv}] = {Symbol::Eqv, Symbol::I, Symbol::MkEqv, Symbol::E1};
     for (TokenKind t : {TokenKind::RParen, TokenKind::End}) M[{Symbol::E1, t}] = {};
 
-    M[{Symbol::I1, TokenKind::Imp}] = {Symbol::Imp, Symbol::I, Symbol::MkImp};
+    M[{Symbol::I1, TokenKind::Imp}] = {Symbol::Imp, Symbol::D, Symbol::MkImp, Symbol::I1};
     for (TokenKind t : {TokenKind::Eqv, TokenKind::RParen, TokenKind::End}) M[{Symbol::I1, t}] = {};
 
     M[{Symbol::D1, TokenKind::Or}] = {Symbol::Or, Symbol::C, Symbol::MkOr, Symbol::D1};
@@ -264,7 +275,7 @@ public:
                     throw ParseError(describe(tok), tok.GetPos());
                 }
                 if (tok.GetKind() == TokenKind::Var) values.push_back(Node::Var(tok.ToString()));
-                if (tok.GetKind() == TokenKind::Const) values.push_back(Node::Const(tok.ToString() == "1"));
+                if (tok.GetKind() == TokenKind::Const) values.push_back(Node::Const(tok.ToString() == "1" || tok.ToString() == "t"));
                 if (X == Symbol::End) break;
                 ++pos;
             } else if (isAction(X)) {
